@@ -1,159 +1,132 @@
-using UnityEngine;
 using System.Collections;
-using System.Collections.Generic;
+using UnityEngine;
 
-public class DynamicMountains : MonoBehaviour
+public class DynamicTerrain : MonoBehaviour
 {
-    private Terrain terrain;
+    public Terrain terrain;  // Reference to the terrain
+    public float mountainSpeed = 1.0f;  // Speed at which mountains are generated
+    public float maxMountainHeight = 25f;  // Maximum mountain height
+    public int minBrushSize = 30;  // Minimum brush size
+    public int maxBrushSize = 100;  // Maximum brush size
+    public float minBrushOpacity = 1f;  // Minimum brush opacity
+    public float maxBrushOpacity = 8f;  // Maximum brush opacity
+    public int mountainDetailLayers = 20;  // Number of strokes to simulate "holding" the brush
+    public Texture2D[] brushTextures;  // Assign built-in brushes from Unity here
+
     private TerrainData terrainData;
-
-    public float maxMountainHeight = 50f; // Maximum height for mountains
-    public float minMountainHeight = 10f; // Minimum height for mountains
-    public float maxMountainWidth = 100f; // Maximum width for mountains (double height)
-    public float maxMountainPercentage = 40f; // Maximum percentage of terrain area for mountains
-
-    public float growDuration = 5f; // How fast the mountains grow
-    public float flattenDuration = 5f; // How fast they flatten
-    public float pauseBetweenMountains = 2f; // Pause between new mountain creation
-    public float flattenPauseDuration = 5f; // Pause after max mountains are built before flattening
-
-    private List<Vector2Int> activeMountainPositions = new List<Vector2Int>();
-    private List<int> activeMountainRadii = new List<int>();
-    private List<float> activeMountainHeights = new List<float>();
-
-    private float totalTerrainArea;
-    private float currentMountainArea;
-    private float maxAllowedMountainArea;
+    private int terrainWidth;
+    private int terrainHeight;
+    private bool isGenerating = false;
 
     void Start()
     {
-        terrain = Terrain.activeTerrain;
+        // Initialize terrain data
         terrainData = terrain.terrainData;
+        terrainWidth = terrainData.heightmapResolution;
+        terrainHeight = terrainData.heightmapResolution;
 
-        // Calculate the total terrain area based on terrain resolution (mesh size)
-        totalTerrainArea = terrainData.heightmapResolution * terrainData.heightmapResolution;
-        // Calculate the maximum allowed area for mountains based on the maxMountainPercentage
-        maxAllowedMountainArea = (maxMountainPercentage / 100f) * totalTerrainArea;
-
-        // Start the process
-        StartCoroutine(ManageTerrainCycle());
+        // Start the mountain generation process
+        StartCoroutine(GenerateMountains());
     }
 
-    IEnumerator ManageTerrainCycle()
+    IEnumerator GenerateMountains()
     {
         while (true)
         {
-            // Check if mountains cover more area than allowed percentage
-            if (currentMountainArea >= maxAllowedMountainArea)
+            if (!isGenerating)
             {
-                yield return StartCoroutine(FlattenAllMountains());
+                isGenerating = true;
+
+                // Randomly choose a position on the terrain for the mountain
+                int randomX = Random.Range(0, terrainWidth);
+                int randomY = Random.Range(0, terrainHeight);
+
+                // Randomize the brush size for this mountain
+                int brushSize = Random.Range(minBrushSize, maxBrushSize);
+
+                // Randomly determine the number of strokes to simulate "scrubbing"
+                int strokeCount = Random.Range(3, mountainDetailLayers);
+
+                // Start generating the mountain
+                yield return StartCoroutine(BuildMountain(randomX, randomY, brushSize, strokeCount));
+
+                isGenerating = false;
             }
-            else
-            {
-                // Generate a new mountain
-                GenerateRandomMountain();
-                yield return new WaitForSeconds(pauseBetweenMountains);
-            }
+
+            yield return new WaitForSeconds(mountainSpeed);
         }
     }
 
-    void GenerateRandomMountain()
+    IEnumerator BuildMountain(int centerX, int centerY, int brushSize, int strokeCount)
     {
-        // Randomly generate position and mountain properties
-        int randomX = Random.Range((int)maxMountainWidth, terrainData.heightmapResolution - (int)maxMountainWidth);
-        int randomY = Random.Range((int)maxMountainWidth, terrainData.heightmapResolution - (int)maxMountainWidth);
-        float mountainHeight = Random.Range(minMountainHeight, maxMountainHeight); // Random height
-        int mountainWidth = (int)Mathf.Max(mountainHeight * 2, maxMountainWidth); // Width must be at least double the height
+        float[,] heights = terrainData.GetHeights(0, 0, terrainWidth, terrainHeight);
 
-        // Calculate the area of the current mountain
-        float mountainArea = Mathf.PI * (mountainWidth / 2f) * (mountainWidth / 2f);
-
-        // Check if adding this mountain would exceed the allowed area
-        if (currentMountainArea + mountainArea > maxAllowedMountainArea)
+        // Apply multiple strokes to simulate the "click and hold" painting effect
+        for (int i = 0; i < strokeCount; i++)
         {
-            return; // Skip adding the mountain if it exceeds the limit
+            // Randomize the brush opacity
+            float brushOpacity = Random.Range(minBrushOpacity, maxBrushOpacity) / 10f;
+
+            // Randomize the brush position within a certain range around the center point
+            int randomOffsetX = Random.Range(-brushSize / 2, brushSize / 2);
+            int randomOffsetY = Random.Range(-brushSize / 2, brushSize / 2);
+
+            // Select a random built-in Unity terrain brush
+            int brushIndex = Random.Range(0, brushTextures.Length);
+
+            // Apply the brush stroke using different built-in brushes
+            yield return StartCoroutine(ApplyBrush(heights, centerX + randomOffsetX, centerY + randomOffsetY, brushSize, brushOpacity, brushTextures[brushIndex]));
         }
 
-        // Store the mountain's data
-        activeMountainPositions.Add(new Vector2Int(randomX, randomY));
-        activeMountainRadii.Add(mountainWidth / 2);
-        activeMountainHeights.Add(mountainHeight);
-        currentMountainArea += mountainArea;
-
-        // Gradually grow the mountain
-        StartCoroutine(GrowMountain(randomX, randomY, mountainWidth, mountainHeight, growDuration));
+        // Apply the modified heights back to the terrain
+        terrainData.SetHeights(0, 0, heights);
     }
 
-    IEnumerator GrowMountain(int xPos, int yPos, int diameter, float targetHeight, float duration)
+    IEnumerator ApplyBrush(float[,] heights, int centerX, int centerY, int brushSize, float brushOpacity, Texture2D brushTexture)
     {
-        int radius = diameter / 2;
-        float[,] heights = terrainData.GetHeights(xPos - radius, yPos - radius, diameter, diameter);
-        float[,] originalHeights = (float[,])heights.Clone();
+        // Get the terrain size
+        int terrainWidth = heights.GetLength(0);
+        int terrainHeight = heights.GetLength(1);
 
-        float elapsedTime = 0;
-
-        while (elapsedTime < duration)
+        // Iterate over the brush area
+        for (int x = -brushSize; x <= brushSize; x++)
         {
-            elapsedTime += Time.deltaTime;
-            float growthFactor = elapsedTime / duration;
-
-            for (int x = 0; x < diameter; x++)
+            for (int y = -brushSize; y <= brushSize; y++)
             {
-                for (int y = 0; y < diameter; y++)
+                int posX = centerX + x;
+                int posY = centerY + y;
+
+                // Ensure the position is within the terrain bounds
+                if (posX < 0 || posX >= terrainWidth || posY < 0 || posY >= terrainHeight)
+                    continue; // Skip if out of bounds
+
+                // Calculate the distance from the brush center
+                float distance = Mathf.Sqrt(x * x + y * y) / brushSize;
+
+                if (distance <= 1.0f)
                 {
-                    float distanceToCenter = Mathf.Sqrt((x - radius) * (x - radius) + (y - radius) * (y - radius));
-                    float heightMultiplier = Mathf.Clamp01(1 - distanceToCenter / radius);
+                    // Use the selected built-in brush texture to modify the terrain's height
+                    float brushValue = GetBrushValueFromTexture(brushTexture, x, y, brushSize);
 
-                    heights[x, y] = Mathf.Lerp(originalHeights[x, y], targetHeight * heightMultiplier, growthFactor);
+                    // Apply height modification based on the brush value and opacity
+                    float newHeight = heights[posY, posX] + Mathf.Clamp01(brushOpacity * brushValue * (1f - distance));
+
+                    // Clamp the new height to prevent spikes or walls
+                    heights[posY, posX] = Mathf.Clamp(newHeight, 0f, maxMountainHeight); // Ensure new height stays within bounds
                 }
             }
-
-            terrainData.SetHeights(xPos - radius, yPos - radius, heights);
-            yield return null;
         }
+
+        yield return null;
     }
 
-    IEnumerator FlattenAllMountains()
+    float GetBrushValueFromTexture(Texture2D brushTexture, int x, int y, int brushSize)
     {
-        for (int i = 0; i < activeMountainPositions.Count; i++)
-        {
-            Vector2Int mountainPos = activeMountainPositions[i];
-            int radius = activeMountainRadii[i];
+        // Get the normalized pixel coordinates based on the brush size
+        float u = (x + brushSize) / (2f * brushSize);
+        float v = (y + brushSize) / (2f * brushSize);
 
-            // Gradually flatten the mountain
-            yield return StartCoroutine(FlattenMountain(mountainPos.x, mountainPos.y, radius, flattenDuration));
-        }
-
-        // Reset the mountain data after flattening
-        activeMountainPositions.Clear();
-        activeMountainRadii.Clear();
-        activeMountainHeights.Clear();
-        currentMountainArea = 0;
-    }
-
-    IEnumerator FlattenMountain(int xPos, int yPos, int radius, float duration)
-    {
-        int diameter = radius * 2;
-        float[,] heights = terrainData.GetHeights(xPos - radius, yPos - radius, diameter, diameter);
-        float[,] originalHeights = (float[,])heights.Clone();
-
-        float elapsedTime = 0;
-
-        while (elapsedTime < duration)
-        {
-            elapsedTime += Time.deltaTime;
-            float flattenFactor = elapsedTime / duration;
-
-            for (int x = 0; x < diameter; x++)
-            {
-                for (int y = 0; y < diameter; y++)
-                {
-                    heights[x, y] = Mathf.Lerp(heights[x, y], originalHeights[x, y], flattenFactor);
-                }
-            }
-
-            terrainData.SetHeights(xPos - radius, yPos - radius, heights);
-            yield return null;
-        }
+        // Sample the brush texture and return the grayscale value
+        return brushTexture.GetPixelBilinear(u, v).grayscale;
     }
 }
